@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Performance Chart</title>
+
+    <link rel="stylesheet" href="https://pyscript.net/releases/2024.1.1/core.css">
+    <script type="module" src="https://pyscript.net/releases/2024.1.1/core.js"></script>
+
+    <style>
+        :root {
+            --outer-bg: #f7dfe3;
+            --chart-bg: #f8e0e4;
+            --border: #bdb5b7;
+            --grid: rgba(115, 115, 115, 0.14);
+            --text: #222;
+            --cost: #ffea69;
+            --cost-border: #d7bd36;
+            --cpa: #326be8;
+            --cpa-border: #234da9;
+            --roi: #228b28;
+            --roi-border: #146117;
+            --conversion: #9714dc;
+            --conversion-border: #671099;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            width: 100%;
+            min-height: 100%;
+            font-family: Arial, Helvetica, sans-serif;
+            background: var(--outer-bg);
+            color: var(--text);
+        }
+
+        body { overflow-x: hidden; }
+
+        .page {
+            width: 100%;
+            min-height: 650px;
+            padding-top: 76px;
+            background: var(--outer-bg);
+        }
+
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 520px;
+        }
+
+        svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+            overflow: visible;
+            user-select: none;
+        }
+
+        .chart-area { fill: var(--chart-bg); stroke: var(--border); stroke-width: 1.3; }
+        .grid-line { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+        .axis-line { stroke: #7f7f7f; stroke-width: 1; shape-rendering: crispEdges; }
+        .axis-label { fill: #333; font-size: 14px; }
+        .axis-title { fill: #333; font-size: 15px; font-weight: bold; }
+        .cost-area { fill: var(--cost); fill-opacity: 0.48; stroke: none; }
+        .cost-line { fill: none; stroke: var(--cost-border); stroke-width: 1.3; opacity: 0.85; }
+        .cpa-line { fill: none; stroke: var(--cpa); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 13 9; }
+        .roi-line { fill: none; stroke: var(--roi); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+        .conversion-line { fill: none; stroke: var(--conversion); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+        .point { cursor: pointer; transition: r 120ms ease, stroke-width 120ms ease, filter 120ms ease; }
+        .point:hover { r: 8; stroke-width: 3; filter: drop-shadow(0 0 4px rgba(0, 0, 0, 0.5)); }
+        .point-cost { fill: var(--cost); stroke: var(--cost-border); stroke-width: 1.2; }
+        .point-cpa { fill: var(--cpa); stroke: var(--cpa-border); stroke-width: 1.2; }
+        .point-roi { fill: var(--roi); stroke: var(--roi-border); stroke-width: 1.2; }
+        .point-conversion { fill: var(--conversion); stroke: var(--conversion-border); stroke-width: 1.2; }
+        .hover-line { stroke: rgba(80, 80, 80, 0.38); stroke-width: 1; stroke-dasharray: 5 5; pointer-events: none; }
+
+        .tooltip {
+            position: absolute;
+            z-index: 20;
+            width: 330px;
+            min-height: 178px;
+            padding: 15px 18px;
+            border: 1px solid #b8b8b8;
+            border-radius: 7px;
+            background: rgba(255, 255, 255, 0.97);
+            box-shadow: 0 5px 11px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+            font-size: 20px;
+            line-height: 1.3;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateY(5px);
+            transition: opacity 120ms ease, transform 120ms ease;
+        }
+
+        .tooltip.visible { opacity: 1; transform: translateY(0); }
+        .tooltip-date { margin-bottom: 3px; font-size: 19px; }
+        .tooltip-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+        .tooltip-dot { flex: 0 0 auto; width: 17px; height: 17px; border-radius: 50%; }
+        .dot-cost { background: var(--cost); }
+        .dot-cpa { background: var(--cpa); }
+        .dot-roi { background: var(--roi); }
+        .dot-conversion { background: var(--conversion); }
+        .tooltip-value { font-weight: bold; }
+
+        @media (max-width: 700px) {
+            .page { padding-top: 35px; }
+            .chart-container { height: 440px; }
+            .tooltip { width: 275px; font-size: 16px; }
+            .tooltip-date { font-size: 16px; }
+            .axis-label { font-size: 11px; }
+            .axis-title { font-size: 12px; }
+        }
+    </style>
+</head>
+
+<body>
+    <main class="page">
+        <div class="chart-container">
+            <svg id="chart" viewBox="0 0 1000 520" role="img" aria-label="Интерактивный график Cost, CPA, ROI confirmed и Conversions">
+                <defs>
+                    <clipPath id="plotClip">
+                        <rect x="140" y="20" width="740" height="370"></rect>
+                    </clipPath>
+                </defs>
+
+                <rect class="chart-area" x="140" y="20" width="740" height="370"></rect>
+                <g id="grid"></g>
+                <g id="labels"></g>
+
+                <g clip-path="url(#plotClip)">
+                    <path id="costArea" class="cost-area"></path>
+                    <path id="costLine" class="cost-line"></path>
+                    <path id="cpaLine" class="cpa-line"></path>
+                    <path id="roiLine" class="roi-line"></path>
+                    <path id="conversionLine" class="conversion-line"></path>
+                    <line id="hoverLine" class="hover-line" x1="0" y1="20" x2="0" y2="390" visibility="hidden"></line>
+                    <g id="points"></g>
+                </g>
+
+                <line class="axis-line" x1="140" y1="390" x2="880" y2="390"></line>
+                <line class="axis-line" x1="140" y1="20" x2="140" y2="390"></line>
+
+                <text class="axis-title" x="510" y="478" text-anchor="middle">Дата</text>
+                <text class="axis-title" x="29" y="205" text-anchor="middle" transform="rotate(-90 29 205)">Значение</text>
+            </svg>
+
+            <div id="tooltip" class="tooltip">
+                <div id="tooltipDate" class="tooltip-date"></div>
+                <div class="tooltip-row"><span class="tooltip-dot dot-cost"></span><span>Cost:</span><span id="tooltipCost" class="tooltip-value"></span></div>
+                <div class="tooltip-row"><span class="tooltip-dot dot-cpa"></span><span>CPA:</span><span id="tooltipCpa" class="tooltip-value"></span></div>
+                <div class="tooltip-row"><span class="tooltip-dot dot-roi"></span><span>ROI confirmed:</span><span id="tooltipRoi" class="tooltip-value"></span></div>
+                <div class="tooltip-row"><span class="tooltip-dot dot-conversion"></span><span>Conversions:</span><span id="tooltipConversions" class="tooltip-value"></span></div>
+            </div>
+        </div>
+    </main>
+
+    <script type="py">
+from js import document, console
+from pyodide.ffi import create_proxy
+import math
+
+# Данные извлечены из пяти приложенных изображений.
+# Точки, явно показанные в подсказках:
+# 10.06.2026: Cost 2.04, CPA 0.68, ROI confirmed 610.78, Conversions 3
+# 11.06.2026: Cost 25.85, CPA 0.86, ROI confirmed 180.50, Conversions 30
+# 12.06.2026: Cost 44.36, CPA 1.23, ROI confirmed 161.47, Conversions 36
+# 13.06.2026: Cost 55.65, CPA 0.79, ROI confirmed 56.33, Conversions 70
+# 14.06.2026: Cost 63.75, CPA 0.71, ROI confirmed 357.25, Conversions 90
+# Остальные точки оставлены интерполированными, поскольку на приложенных
+# изображениях для них нет отдельных числовых подсказок.
+
+data = [
+    {"date": "10.06.2026", "cost": 2.04, "cpa": 0.68, "roi": 610.78, "conversions": 3},
+    {"date": "11.06.2026", "cost": 25.85, "cpa": 0.86, "roi": 180.50, "conversions": 30},
+    {"date": "12.06.2026", "cost": 44.36, "cpa": 1.23, "roi": 161.47, "conversions": 36},
+    {"date": "13.06.2026", "cost": 55.65, "cpa": 0.79, "roi": 56.33, "conversions": 70},
+    {"date": "14.06.2026", "cost": 63.75, "cpa": 0.71, "roi": 357.25, "conversions": 90},
+]
+
+PLOT_LEFT = 140
+PLOT_TOP = 20
+PLOT_WIDTH = 740
+PLOT_HEIGHT = 370
+PLOT_BOTTOM = PLOT_TOP + PLOT_HEIGHT
+
+# Автомасштабирование единой вертикальной шкалы.
+# В расчете участвуют все четыре ряда: Cost, CPA,
+# ROI confirmed и Conversions.
+# Шкала начинается с нуля, а верхняя граница
+# округляется до удобного значения.
+
+def calculate_y_max():
+    values = []
+
+    for item in data:
+        values.extend(
+            [
+                float(item["cost"]),
+                float(item["cpa"]),
+                float(item["roi"]),
+                float(item["conversions"]),
+            ]
+        )
+
+    maximum = max(values) if values else 1.0
+
+    if maximum <= 0:
+        return 1.0
+
+    padding = maximum * 0.08
+    raw_maximum = maximum + padding
+
+    step_candidates = [
+        1,
+        2,
+        5,
+        10,
+        20,
+        25,
+        50,
+        100,
+        200,
+        250,
+        500,
+        1000,
+    ]
+
+    target_step = raw_maximum / 4.0
+    step = min(
+        step_candidates,
+        key=lambda candidate: abs(
+            candidate - target_step
+        )
+    )
+
+    return max(
+        step,
+        math.ceil(raw_maximum / step) * step
+    )
+
+
+Y_MAX = calculate_y_max()
+
+
+def svg_element(tag, attributes=None):
+    element = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        tag
+    )
+
+    if attributes:
+        for key, value in attributes.items():
+            element.setAttribute(key, str(value))
+
+    return element
+
+
+def clear_element(element):
+    while element.firstChild:
+        element.removeChild(element.firstChild)
+
+
+def x_position(index):
+    if len(data) == 1:
+        return PLOT_LEFT + PLOT_WIDTH / 2
+
+    return PLOT_LEFT + (
+        index / (len(data) - 1)
+    ) * PLOT_WIDTH
+
+
+def scale_value(value, minimum, maximum):
+    """
+    Масштабирует отдельный ряд в общую область графика.
+    Вертикальные шкалы рядов существуют логически,
+    но не выводятся на экран.
+    """
+
+    if maximum <= minimum:
+        return PLOT_BOTTOM - PLOT_HEIGHT / 2
+
+    ratio = (
+        value - minimum
+    ) / (
+        maximum - minimum
+    )
+
+    return PLOT_BOTTOM - ratio * PLOT_HEIGHT
+
+
+# Собственные скрытые шкалы рядов.
+ROI_MIN = 0.0
+ROI_MAX = max(
+    1.0,
+    max(item["roi"] for item in data)
+)
+
+COST_MIN = min(
+    item["cost"] for item in data
+)
+COST_MAX = max(
+    item["cost"] for item in data
+)
+
+CPA_MIN = min(
+    item["cpa"] for item in data
+)
+CPA_MAX = max(
+    item["cpa"] for item in data
+)
+
+CONVERSIONS_MIN = min(
+    item["conversions"] for item in data
+)
+CONVERSIONS_MAX = max(
+    item["conversions"] for item in data
+)
+
+
+def y_position(value):
+    return scale_value(
+        value,
+        ROI_MIN,
+        ROI_MAX
+    )
+
+
+def y_cost(value):
+    return scale_value(
+        value,
+        COST_MIN,
+        COST_MAX
+    )
+
+
+def y_cpa(value):
+    return scale_value(
+        value,
+        CPA_MIN,
+        CPA_MAX
+    )
+
+
+def y_conversions(value):
+    return scale_value(
+        value,
+        CONVERSIONS_MIN,
+        CONVERSIONS_MAX
+    )
+
+
+def format_number(value):
+    return f"{value:.2f}"
+
+
+def smooth_path(points):
+    if len(points) == 0:
+        return ""
+
+    if len(points) == 1:
+        x, y = points[0]
+        return f"M {x:.2f},{y:.2f}"
+
+    path = f"M {points[0][0]:.2f},{points[0][1]:.2f}"
+
+    for i in range(len(points) - 1):
+        p0 = points[i - 1] if i > 0 else points[i]
+        p1 = points[i]
+        p2 = points[i + 1]
+        p3 = points[i + 2] if i + 2 < len(points) else p2
+
+        cp1_x = p1[0] + (p2[0] - p0[0]) / 6
+        cp1_y = p1[1] + (p2[1] - p0[1]) / 6
+        cp2_x = p2[0] - (p3[0] - p1[0]) / 6
+        cp2_y = p2[1] - (p3[1] - p1[1]) / 6
+
+        path += (
+            f" C {cp1_x:.2f},{cp1_y:.2f}"
+            f" {cp2_x:.2f},{cp2_y:.2f}"
+            f" {p2[0]:.2f},{p2[1]:.2f}"
+        )
+
+    return path
+
+
+def show_tooltip(index, event=None):
+    item = data[index]
+
+    tooltip_date.textContent = item["date"]
+    tooltip_cost.textContent = format_number(item["cost"])
+    tooltip_cpa.textContent = format_number(item["cpa"])
+    tooltip_roi.textContent = format_number(item["roi"])
+    tooltip_conversions.textContent = str(item["conversions"])
+
+    x = x_position(index)
+    hover_line.setAttribute("x1", x)
+    hover_line.setAttribute("x2", x)
+    hover_line.setAttribute("visibility", "visible")
+
+    wrapper = document.querySelector(".chart-container")
+    wrapper_rect = wrapper.getBoundingClientRect()
+    chart_rect = chart.getBoundingClientRect()
+
+    scale_x = chart_rect.width / 1000
+    scale_y = chart_rect.height / 520
+
+    point_x = x * scale_x + chart_rect.left - wrapper_rect.left
+    point_y = y_position(item["roi"]) * scale_y + chart_rect.top - wrapper_rect.top
+
+    tooltip_width = 330
+    tooltip_height = 180
+    left = point_x + 18
+    top = point_y - tooltip_height - 15
+
+    if left + tooltip_width > wrapper_rect.width:
+        left = point_x - tooltip_width - 18
+
+    if top < 0:
+        top = point_y + 18
+
+    tooltip.style.left = f"{left}px"
+    tooltip.style.top = f"{top}px"
+    tooltip.classList.add("visible")
+
+
+def hide_tooltip(event=None):
+    tooltip.classList.remove("visible")
+    hover_line.setAttribute("visibility", "hidden")
+
+
+grid = document.getElementById("grid")
+labels = document.getElementById("labels")
+clear_element(grid)
+clear_element(labels)
+
+# Вертикальная шкала строится автоматически.
+# Она сохраняет единую шкалу, но ее максимум
+# рассчитывается по данным текущего графика.
+y_ticks = [
+    Y_MAX * index / 4
+    for index in range(5)
+]
+
+for tick in y_ticks:
+    y = y_position(tick)
+
+    grid.appendChild(svg_element("line", {
+        "class": "grid-line",
+        "x1": PLOT_LEFT,
+        "y1": y,
+        "x2": PLOT_LEFT + PLOT_WIDTH,
+        "y2": y,
+    }))
+
+    label = svg_element("text", {
+        "class": "axis-label",
+        "x": PLOT_LEFT - 14,
+        "y": y + 5,
+        "text-anchor": "end",
+    })
+
+    label.textContent = format_number(tick).rstrip("0").rstrip(".")
+    labels.appendChild(label)
+
+# Горизонтальная ось намеренно не имеет подписей дат.
+# Вертикальные линии сетки также не создаются,
+# чтобы область X оставалась чистой, как во вложении.
+
+cost_points = []
+cpa_points = []
+roi_points = []
+conversion_points = []
+
+for index, item in enumerate(data):
+    x = x_position(index)
+    cost_points.append((x, y_cost(item["cost"])))
+    cpa_points.append((x, y_position(item["cpa"])))
+    roi_points.append((x, y_position(item["roi"])))
+    conversion_points.append((x, y_conversions(item["conversions"])))
+
+document.getElementById("costLine").setAttribute("d", smooth_path(cost_points))
+document.getElementById("cpaLine").setAttribute("d", smooth_path(cpa_points))
+document.getElementById("roiLine").setAttribute("d", smooth_path(roi_points))
+document.getElementById("conversionLine").setAttribute("d", smooth_path(conversion_points))
+
+cost_area_path = smooth_path(cost_points)
+cost_area_path += (
+    f" L {cost_points[-1][0]:.2f},{PLOT_BOTTOM:.2f}"
+    f" L {cost_points[0][0]:.2f},{PLOT_BOTTOM:.2f} Z"
+)
+document.getElementById("costArea").setAttribute("d", cost_area_path)
+
+points_group = document.getElementById("points")
+clear_element(points_group)
+
+tooltip = document.getElementById("tooltip")
+tooltip_date = document.getElementById("tooltipDate")
+tooltip_cost = document.getElementById("tooltipCost")
+tooltip_cpa = document.getElementById("tooltipCpa")
+tooltip_roi = document.getElementById("tooltipRoi")
+tooltip_conversions = document.getElementById("tooltipConversions")
+hover_line = document.getElementById("hoverLine")
+chart = document.getElementById("chart")
+
+series = [
+    ("cost", cost_points, "point-cost", 5.5),
+    ("cpa", cpa_points, "point-cpa", 5.5),
+    ("roi", roi_points, "point-roi", 5.5),
+    ("conversions", conversion_points, "point-conversion", 6),
+]
+
+for series_name, points, css_class, radius in series:
+    for index, (x, y) in enumerate(points):
+        point = svg_element("circle", {
+            "class": f"point {css_class}",
+            "cx": x,
+            "cy": y,
+            "r": radius,
+        })
+
+        enter_proxy = create_proxy(
+            lambda event, current_index=index: show_tooltip(current_index, event)
+        )
+
+        move_proxy = create_proxy(
+            lambda event, current_index=index: show_tooltip(current_index, event)
+        )
+
+        point.addEventListener("mouseenter", enter_proxy)
+        point.addEventListener("mousemove", move_proxy)
+        points_group.appendChild(point)
+
+
+def chart_mouse_move(event):
+    rect = chart.getBoundingClientRect()
+
+    svg_x = ((event.clientX - rect.left) / rect.width) * 1000
+
+    if svg_x < PLOT_LEFT or svg_x > PLOT_LEFT + PLOT_WIDTH:
+        hide_tooltip()
+        return
+
+    nearest_index = min(
+        range(len(data)),
+        key=lambda index: abs(x_position(index) - svg_x)
+    )
+
+    if abs(x_position(nearest_index) - svg_x) <= 90:
+        show_tooltip(nearest_index, event)
+    else:
+        hide_tooltip()
+
+
+def chart_mouse_leave(event):
+    hide_tooltip()
+
+
+move_proxy = create_proxy(chart_mouse_move)
+leave_proxy = create_proxy(chart_mouse_leave)
+chart.addEventListener("mousemove", move_proxy)
+chart.addEventListener("mouseleave", leave_proxy)
+
+console.log("Интерактивный график загружен")
+    </script>
+</body>
+</html>
